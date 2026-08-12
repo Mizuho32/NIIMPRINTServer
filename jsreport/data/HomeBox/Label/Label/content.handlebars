@@ -21,9 +21,13 @@ incoming API request.
             </div>
 
             <div class="info">
-                <div class="name">{{name}}</div>
-                <div class="id">{{id}}</div>
-                <div class="location">Location: {{location}}</div>
+                <div class="name">
+                    <div class="name-text">{{name}}</div>
+                </div>
+                <div class="meta">
+                    <div class="id">{{id}}</div>
+                    <div class="location">Location: {{location}}</div>
+                </div>
             </div>
         </div>
     </body>
@@ -32,12 +36,27 @@ incoming API request.
     <script>
         var qrcode = new QRCode(document.getElementById("qr-code"), {
             text: "{{qr}}",
-            width: 128, 
+            width: 128,
             height: 128, 
             colorDark : "#000000",
             colorLight : "#ffffff",
             correctLevel: QRCode.CorrectLevel.M
         });
+
         window.JSREPORT_CHROME_IMAGE_OPTIONS = { type: 'png' }
     </script>
+    <script>
+    window.onload = () => {
+        const name_text = document.querySelector('.name-text');
+        const name = document.querySelector('.name');
+        const text = name_text.textContent.trim();
+
+        // console.log(name.clientHeight, name_text.clientHeight);
+
+        for (var i=0; name_text.clientHeight > name.clientHeight; i++) {
+            name_text.textContent = text.slice(0, -i-1) + '…';
+            // console.log(name.clientHeight, name_text.clientHeight);
+        }
+    };
+</script>
 </html>
