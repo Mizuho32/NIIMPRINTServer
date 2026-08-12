@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <title>{{ app_name }}</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: sans-serif;
+        background: #f9fafb;
+        color: #111827;
+      }
+
+      header,
+      main {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+
+      a {
+        color: #1d4ed8;
+        text-decoration: none;
+      }
+
+      .card {
+        background: white;
+        border: 1px solid #d1d5db;
+        border-radius: 12px;
+        padding: 16px;
+        margin-bottom: 16px;
+      }
+
+      textarea,
+      select,
+      button {
+        font: inherit;
+      }
+
+      textarea,
+      select {
+        width: 100%;
+        box-sizing: border-box;
+        padding: 10px 12px;
+        border-radius: 8px;
+        border: 1px solid #9ca3af;
+      }
+
+      textarea {
+        min-height: 240px;
+      }
+
+      button {
+        padding: 10px 14px;
+        border-radius: 8px;
+        border: none;
+        background: #111827;
+        color: white;
+        cursor: pointer;
+      }
+
+      button.secondary {
+        background: #4b5563;
+      }
+
+      button.warning {
+        background: #b91c1c;
+      }
+
+      .actions {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        text-align: left;
+        padding: 10px 8px;
+        border-bottom: 1px solid #e5e7eb;
+        vertical-align: top;
+      }
+
+      .error {
+        color: #991b1b;
+        background: #fee2e2;
+        border: 1px solid #fecaca;
+        border-radius: 8px;
+        padding: 12px;
+      }
+
+      .hint {
+        color: #4b5563;
+      }
+
+      pre {
+        margin: 0;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>{{ app_name }}</h1>
+    </header>
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+  </body>
+</html>

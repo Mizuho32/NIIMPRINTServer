@@ -1,0 +1,8 @@
+mise*.toml
+config*.json
+label_print_server.sqlite3
+.*.swp
+
+__pycache__/
+/mds/local/
+/images/

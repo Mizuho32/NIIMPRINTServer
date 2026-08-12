@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <section class="card">
+    <h2>Queue intake</h2>
+    <p class="hint">
+      JSON object array を投入すると、transform と printer/template 選択を適用した
+      draft を Queue に追加します。
+    </p>
+    {% if error %}
+      <p class="error">{{ error }}</p>
+    {% endif %}
+    <form method="post" action="/jobs/intake">
+      <textarea name="payload_json">{{ payload_text }}</textarea>
+      <div class="actions" style="margin-top: 12px;">
+        <button type="submit">Enqueue jobs</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card">
+    <h2>Queued jobs</h2>
+    <div class="actions" style="margin-bottom: 16px;">
+      <form method="post" action="/jobs/render-all">
+        <button type="submit">Render all queued jobs</button>
+      </form>
+    </div>
+    <table>
+      <thead>
+        <tr>
+          <th>Job</th>
+          <th>Text</th>
+          <th>Template</th>
+          <th>Printer</th>
+          <th>Render</th>
+          <th>Thumb</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for job in jobs %}
+          <form id="job-render-{{ job.id }}" method="post" action="/jobs/{{ job.id }}/preview-from-list"></form>
+          <tr>
+            <td><a href="/jobs/{{ job.id }}">#{{ job.id }}</a></td>
+            <td>{{ job.summary_text }}</td>
+            <td>
+              <select name="selected_template" form="job-render-{{ job.id }}">
+                {% for name in templates %}
+                  <option value="{{ name }}" {% if name == job.selected_template %}selected{% endif %}>
+                    {{ name }}
+                  </option>
+                {% endfor %}
+              </select>
+            </td>
+            <td>
+              <select name="selected_printer" form="job-render-{{ job.id }}">
+                {% for name in printers %}
+                  <option value="{{ name }}" {% if name == job.selected_printer %}selected{% endif %}>
+                    {{ name }}
+                  </option>
+                {% endfor %}
+              </select>
+            </td>
+            <td>
+              <button type="submit" form="job-render-{{ job.id }}">Render</button>
+            </td>
+            <td>
+              {% if job.render_error %}
+                <div class="error">{{ job.render_error }}</div>
+              {% elif job.preview_data_url %}
+                <img
+                  src="{{ job.preview_data_url }}"
+                  alt="Rendered preview for job {{ job.id }}"
+                  style="max-width: 180px; width: 100%; border: 1px solid #d1d5db; border-radius: 12px;"
+                />
+              {% else %}
+                <span class="hint">No preview</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="6">No queued jobs yet.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+{% endblock %}

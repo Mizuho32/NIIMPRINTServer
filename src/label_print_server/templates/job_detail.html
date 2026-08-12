@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block content %}
+  <section class="card">
+    <p><a href="/jobs">&larr; Queue list</a></p>
+    <h2>Job #{{ job.id }}</h2>
+    <p class="hint">
+      この画面の変更はこのブラウザセッションにだけ保存されます。Queue 上の元データは
+      変えず、preview 用の draft を調整できます。
+    </p>
+    {% if render_error %}
+      <p class="error">{{ render_error }}</p>
+    {% endif %}
+    <form method="post" action="/jobs/{{ job.id }}/preview">
+      <div class="card">
+        <label for="selected_template"><strong>Template</strong></label>
+        <select id="selected_template" name="selected_template">
+          {% for name in templates %}
+            <option value="{{ name }}" {% if name == selected_template %}selected{% endif %}>
+              {{ name }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="card">
+        <label for="selected_printer"><strong>Printer</strong></label>
+        <select id="selected_printer" name="selected_printer">
+          {% for name in printers %}
+            <option value="{{ name }}" {% if name == selected_printer %}selected{% endif %}>
+              {{ name }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="card">
+        <label for="data_json"><strong>Draft JSON</strong></label>
+        <textarea id="data_json" name="data_json">{{ data_json }}</textarea>
+      </div>
+
+      <div class="actions">
+        <button type="submit">Render PNG preview</button>
+        <button
+          type="submit"
+          formaction="/jobs/{{ job.id }}/draft"
+          class="secondary"
+        >
+          Save session draft
+        </button>
+        <button
+          type="submit"
+          formaction="/jobs/{{ job.id }}/clear-session"
+          formmethod="post"
+          class="warning"
+        >
+          Clear session draft
+        </button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card">
+    <h3>Raw input</h3>
+    <pre>{{ raw_json }}</pre>
+  </section>
+
+  <section class="card">
+    <h3>Preview</h3>
+    {% if preview_data_url %}
+      <img
+        src="{{ preview_data_url }}"
+        alt="Rendered preview for job {{ job.id }}"
+        style="max-width: 100%; border: 1px solid #d1d5db; border-radius: 12px;"
+      />
+    {% else %}
+      <p class="hint">まだ preview は生成されていません。</p>
+    {% endif %}
+  </section>
+{% endblock %}
