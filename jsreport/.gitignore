@@ -1,0 +1,8 @@
+dataJson.json
+jsreport.config.json
+
+/package*.json
+/server.js
+/data/
+/logs/
+node_modules/
