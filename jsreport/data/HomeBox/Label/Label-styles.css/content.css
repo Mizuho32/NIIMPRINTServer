@@ -1,0 +1,66 @@
+@page {
+  margin: 0;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+}
+
+body {
+  display: flex;
+}
+
+.label {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  width: 100%;
+  min-height: 100vh;
+  padding: 2mm;
+  gap: 3mm;
+  overflow: hidden;
+}
+
+.qr {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+}
+
+#qr-code,
+#qr-code img,
+#qr-code canvas {
+  display: block;
+}
+
+.info {
+  flex: 1;
+  min-width: 0;
+}
+
+.name {
+  font-size: 2em;
+  line-height: 1.05;
+  font-weight: bold;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.id {
+  font-size: 1.1em;
+  font-weight: bold;
+  white-space: nowrap;
+}
+
+.location {
+  font-size: 1.2em;
+  white-space: nowrap;
+  overflow: hidden;
+}

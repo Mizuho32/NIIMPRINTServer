@@ -1,0 +1,43 @@
+<!--
+Invoice dynamically rendered into html using handlebars and converted into pdf
+using chrome-pdf recipe. The styles are extracted into separate asset for
+better readability and later reuse.
+
+Data to this sample are mocked at the design time and should be filled on the
+incoming API request.
+!-->
+
+<html>
+    <head>
+        <meta content="text/html; charset=utf-8" http-equiv="Content-Type">
+        <style>
+            {{asset "Label-styles.css" "utf8"}}
+        </style>
+    </head>
+    <body>
+        <div class="label">
+            <div class="qr">
+                <div id="qr-code"></div>
+            </div>
+
+            <div class="info">
+                <div class="name">{{name}}</div>
+                <div class="id">{{id}}</div>
+                <div class="location">Location: {{location}}</div>
+            </div>
+        </div>
+    </body>
+
+    <script src="https://unpkg.com/qrcodejs@1.0.0/qrcode.js"></script>
+    <script>
+        var qrcode = new QRCode(document.getElementById("qr-code"), {
+            text: "{{qr}}",
+            width: 128, 
+            height: 128, 
+            colorDark : "#000000",
+            colorLight : "#ffffff",
+            correctLevel: QRCode.CorrectLevel.M
+        });
+        window.JSREPORT_CHROME_IMAGE_OPTIONS = { type: 'png' }
+    </script>
+</html>
