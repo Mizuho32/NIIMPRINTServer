@@ -2,7 +2,7 @@
 
 JSON object / array を受け取り、Queue に積み、Web UI で内容確認・補正したうえで `jsreport` でラベル PNG preview を生成し、`niimprint` 経由で実機印刷するサーバーです。
 
-`niimprint` は外部依存として import して呼び出しており、パッケージ自体は変更していません（`niimprint` 側の Bluetooth 応答パケット drop 等の既知のクセは、`src/label_print_server/printer_client.py` 側のリトライで吸収しています。詳細は `mds/ConnectNiimPrint.md` 参照）。
+`niimprint` は外部依存として import して呼び出しており、パッケージ自体は変更していません。`src/label_print_server/printer_client.py` はプリンタごとに接続を1本だけ張って使い回し（実機テストで、印刷のたびに接続し直すと `ECONNRESET`/`EBUSY` が頻発し遅くもなることが分かったため）、失敗時だけ接続を破棄して待ってから再接続します。詳細・経緯は `mds/ConnectNiimPrint.md` 参照。
 
 ## 現在の構成
 
@@ -11,7 +11,7 @@ JSON object / array を受け取り、Queue に積み、Web UI で内容確認�
   - SQLite ベースの Queue / session override 保存
   - transform / template選択 / printer選択パイプライン
   - jsreport preview 連携
-  - `niimprint` 印刷アダプタ（接続失敗時の再接続・リトライ込み）
+  - `niimprint` 印刷アダプタ（プリンタごとに接続を使い回す持続接続 + 失敗時のみ再接続・リトライ）
   - server-rendered UI
 - `tests/test_label_print_server.py`
   - intake / transform / preview / print のテスト
@@ -33,7 +33,8 @@ JSON object / array を受け取り、Queue に積み、Web UI で内容確認�
 7. Job 詳細画面で draft JSON を個別調整して preview を再生成
 8. Queue を保持したまま再確認
 9. 一覧画面・詳細画面から Print 実行。`niimprint` 経由で実機に送信し、成功時のみ Queue から dequeue（失敗時は Queue に残り、エラー内容を表示）
-10. 印刷失敗時は設定した回数・間隔でリトライしてから失敗扱いにする
+10. 印刷失敗時は設定した回数・待機時間で再接続 + リトライしてから失敗扱いにする
+11. プリンタごとの接続を使い回す（連続印刷のたびに繋ぎ直さない）ので、複数枚の連続印刷が速い
 
 ## まだやっていないこと
 
@@ -74,7 +75,7 @@ cd jsreport && npm install
 - `selection`: template / printer の初期選択ロジック
 - `retry`: 印刷失敗時の再試行設定
   - `max_attempts`: 最大試行回数（既定 `3`）
-  - `delay_seconds`: 試行間の待機秒数（既定 `1.0`）
+  - `delay_seconds`: 接続を破棄してから次に再接続するまでの最低待機秒数（既定 `1.0`）。プリンタごとの持続接続が失敗して再接続が必要になったときにだけ効く（接続を使い回せている間は待たない）
 
 `transform` は未定義なら `object -> [object]`, `array[object] -> array[object]` として扱い、`summary_text` は未定義なら `summary_key` → `name` 系の順で使います。
 ```

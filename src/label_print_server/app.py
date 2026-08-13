@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -343,7 +344,18 @@ def create_app(
     report_client = render_client or JsReportClient(config.jsreport_url)
     printer_client = print_client or NiimprintPrintClient(config.retry)
 
-    app = FastAPI(title=config.app_name)
+    @asynccontextmanager
+    async def _lifespan(_: FastAPI):
+        yield
+        # NiimprintPrintClient holds one persistent connection per printer
+        # (see mds/ConnectNiimPrint.md); close them on shutdown instead of
+        # leaving sockets to the GC. Fake print clients used in tests don't
+        # need this, hence the duck-typed close().
+        close = getattr(printer_client, "close", None)
+        if callable(close):
+            close()
+
+    app = FastAPI(title=config.app_name, lifespan=_lifespan)
     app.add_middleware(SessionMiddleware, secret_key=config.session_secret)
 
     @app.get("/", response_class=HTMLResponse)

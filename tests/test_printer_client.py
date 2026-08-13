@@ -19,10 +19,23 @@ def _fake_png_bytes() -> bytes:
     return buffer.getvalue()
 
 
+class FakeSocket:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
 class FakeTransport:
+    """Mirrors niimprint.BluetoothTransport/SerialTransport just enough for
+    NiimprintPrintClient's close-on-discard logic (which reaches into
+    `_transport._sock`) to have something real to close."""
+
     def __init__(self, *args, **kwargs):
         self.args = args
         self.kwargs = kwargs
+        self._sock = FakeSocket()
 
 
 class FakePrinterClientFixed:
@@ -30,9 +43,11 @@ class FakePrinterClientFixed:
 
     fail_times = 0
     densities: ClassVar[list[int]] = []
+    instances: ClassVar[list[FakePrinterClientFixed]] = []
 
     def __init__(self, transport):
-        self.transport = transport
+        self._transport = transport
+        type(self).instances.append(self)
 
     def print_image(self, image, density=5):
         type(self).densities.append(density)
@@ -54,6 +69,7 @@ class NiimprintPrintClientTestCase(unittest.TestCase):
         self._module_patch.start()
         FakePrinterClientFixed.fail_times = 0
         FakePrinterClientFixed.densities = []
+        FakePrinterClientFixed.instances = []
         self.printer = PrinterConfig(
             name="B1", model="b1", address="AA:BB:CC:DD:EE:FF", density=4
         )
@@ -93,6 +109,52 @@ class NiimprintPrintClientTestCase(unittest.TestCase):
         client = NiimprintPrintClient(RetryConfig(max_attempts=1, delay_seconds=0))
         client.print_label(printer, _fake_png_bytes())
         self.assertEqual(FakePrinterClientFixed.densities, [5])
+
+    def test_reuses_connection_across_successful_prints(self) -> None:
+        client = NiimprintPrintClient(RetryConfig(max_attempts=3, delay_seconds=0))
+        client.print_label(self.printer, _fake_png_bytes())
+        client.print_label(self.printer, _fake_png_bytes())
+        client.print_label(self.printer, _fake_png_bytes())
+        # Three prints, but only one underlying connection was ever opened.
+        self.assertEqual(len(FakePrinterClientFixed.instances), 1)
+        self.assertEqual(len(FakePrinterClientFixed.densities), 3)
+        self.assertFalse(FakePrinterClientFixed.instances[0]._transport._sock.closed)
+
+    def test_discards_and_closes_connection_on_failure_then_reconnects(self) -> None:
+        FakePrinterClientFixed.fail_times = 1
+        client = NiimprintPrintClient(RetryConfig(max_attempts=2, delay_seconds=0))
+        client.print_label(self.printer, _fake_png_bytes())
+        self.assertEqual(len(FakePrinterClientFixed.instances), 2)
+        self.assertTrue(FakePrinterClientFixed.instances[0]._transport._sock.closed)
+        self.assertFalse(FakePrinterClientFixed.instances[1]._transport._sock.closed)
+
+    def test_close_closes_all_held_connections(self) -> None:
+        client = NiimprintPrintClient(RetryConfig(max_attempts=1, delay_seconds=0))
+        client.print_label(self.printer, _fake_png_bytes())
+        client.close()
+        self.assertTrue(FakePrinterClientFixed.instances[0]._transport._sock.closed)
+
+    def test_settles_before_reconnecting_after_a_failure(self) -> None:
+        FakePrinterClientFixed.fail_times = 1
+        client = NiimprintPrintClient(RetryConfig(max_attempts=2, delay_seconds=5))
+        sleep_calls: list[float] = []
+        with (
+            mock.patch(
+                "label_print_server.printer_client.time.sleep",
+                side_effect=sleep_calls.append,
+            ),
+            mock.patch.object(NiimprintPrintClient, "_now", return_value=1000.0),
+        ):
+            client.print_label(self.printer, _fake_png_bytes())
+        self.assertEqual(sleep_calls, [5])
+
+    def test_no_settle_delay_on_the_very_first_connect(self) -> None:
+        client = NiimprintPrintClient(RetryConfig(max_attempts=1, delay_seconds=5))
+        with mock.patch(
+            "label_print_server.printer_client.time.sleep"
+        ) as sleep_mock:
+            client.print_label(self.printer, _fake_png_bytes())
+        sleep_mock.assert_not_called()
 
 
 if __name__ == "__main__":
