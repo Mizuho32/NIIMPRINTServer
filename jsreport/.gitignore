@@ -1,5 +1,5 @@
 dataJson.json
-jsreport.config.json
+*config*.json
 
 /package*.json
 /server.js
