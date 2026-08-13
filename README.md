@@ -1,8 +1,8 @@
 # NIIM Label Print Server
 
-JSON object / array を受け取り、Queue に積み、Web UI で内容確認・補正したうえで `jsreport` でラベル PNG preview を生成する phase 1 実装です。
+JSON object / array を受け取り、Queue に積み、Web UI で内容確認・補正したうえで `jsreport` でラベル PNG preview を生成し、`niimprint` 経由で実機印刷するサーバーです。
 
-この段階では **印刷はまだ行いません**。`niimprint` は将来の phase 2 で外部依存として呼び出す前提で、現状は変更していません。
+`niimprint` は外部依存として import して呼び出しており、パッケージ自体は変更していません（`niimprint` 側の Bluetooth 応答パケット drop 等の既知のクセは、`src/label_print_server/printer_client.py` 側のリトライで吸収しています。詳細は `mds/ConnectNiimPrint.md` 参照）。
 
 ## 現在の構成
 
@@ -11,9 +11,12 @@ JSON object / array を受け取り、Queue に積み、Web UI で内容確認�
   - SQLite ベースの Queue / session override 保存
   - transform / template選択 / printer選択パイプライン
   - jsreport preview 連携
+  - `niimprint` 印刷アダプタ（接続失敗時の再接続・リトライ込み）
   - server-rendered UI
 - `tests/test_label_print_server.py`
-  - intake / transform / preview のテスト
+  - intake / transform / preview / print のテスト
+- `tests/test_printer_client.py`
+  - 印刷アダプタのリトライ挙動のテスト（`niimprint` を fake module に差し替えて実行するので実機・実パッケージ不要）
 - `bin/start_label_print_server.sh`
   - `jsreport` と label print server をまとめて起動
 - `requirements-label-print-server.txt`
@@ -29,12 +32,13 @@ JSON object / array を受け取り、Queue に積み、Web UI で内容確認�
 6. 一覧画面でレンダリング結果をまとめて確認
 7. Job 詳細画面で draft JSON を個別調整して preview を再生成
 8. Queue を保持したまま再確認
+9. 一覧画面・詳細画面から Print 実行。`niimprint` 経由で実機に送信し、成功時のみ Queue から dequeue（失敗時は Queue に残り、エラー内容を表示）
+10. 印刷失敗時は設定した回数・間隔でリトライしてから失敗扱いにする
 
 ## まだやっていないこと
 
-- `niimprint` を使った実機印刷
-- 印刷成功時の dequeue
-- プリンタ状態監視や再試行制御
+- プリンタの生存監視（heartbeat によるオンライン確認など）
+- 印刷キューのバックグラウンド処理（現状は操作者が Print ボタンを押した時だけ同期的に印刷する）
 
 ## セットアップ
 
@@ -58,12 +62,19 @@ cd jsreport && npm install
 
 主な項目:
 
-- `printers`: プリンタ名、モデル、将来使う接続先
+- `printers`: プリンタ名、モデル、接続先。各エントリの項目:
+  - `name` / `model`: 表示名と niimprint 側のモデル名（`b1` / `b18` / `b21` / `d11` / `d110` など）
+  - `address`: `connection` が `bluetooth` なら MAC アドレス、`usb` ならシリアルポート（省略時は自動検出）
+  - `connection`: `bluetooth`（既定）または `usb`
+  - `density`: 印刷濃度（既定 `5`）
 - `templates`: `jsreport` 側で利用可能なテンプレート名一覧
 - `debug`: `true` のときだけ UI からの queue intake を有効化
 - `summary_key`: hook 未定義時に一覧の代表テキストへ使うキー名
 - `user_hooks_path`: `transform(data: dict | list) -> list[dict]` と `summary_text(data: dict) -> str` を置ける Python ファイル
 - `selection`: template / printer の初期選択ロジック
+- `retry`: 印刷失敗時の再試行設定
+  - `max_attempts`: 最大試行回数（既定 `3`）
+  - `delay_seconds`: 試行間の待機秒数（既定 `1.0`）
 
 `transform` は未定義なら `object -> [object]`, `array[object] -> array[object]` として扱い、`summary_text` は未定義なら `summary_key` → `name` 系の順で使います。
 ```
@@ -80,22 +91,27 @@ cd jsreport && npm install
 - `GET /jobs` - Queue 一覧
 - `POST /jobs/intake` - debug mode 時だけ UI から JSON object / array を投入
 - `POST /jobs/render-all` - 一覧上の全 job を一括レンダリング
+- `POST /jobs/print-all` - 一覧上の全 job を一括印刷。job ごとに成功時のみ dequeue、失敗した job だけ Queue に残る
 - `POST /jobs/dequeue-all` - 一覧上の全 job を dequeue
 - `POST /jobs/{job_id}/preview-from-list` - 一覧上の個別 job をレンダリング
 - `POST /jobs/{job_id}/dequeue` - 一覧上の個別 job を dequeue
+- `POST /jobs/{job_id}/print-from-list` - 一覧上の個別 job を印刷。成功時のみ dequeue、失敗時は一覧にエラー表示
 - `POST /api/jobs` - API から JSON object / array を投入
 - `GET /api/jobs` - Queue 一覧を JSON で取得
 - `GET /jobs/{job_id}` - 個別 job の編集 / preview 画面
 - `POST /jobs/{job_id}/draft` - セッション内 draft 保存
 - `POST /jobs/{job_id}/preview` - 詳細画面から PNG preview 生成
+- `POST /jobs/{job_id}/print` - 詳細画面から印刷。preview 済みの画像をそのまま送信し、成功時のみ dequeue
 
 ## テスト
 
 ```bash
-PYTHONPATH=src ./venv/bin/ruff check src/label_print_server tests/test_label_print_server.py
-PYTHONPATH=src ./venv/bin/python -m unittest -v tests.test_label_print_server
+PYTHONPATH=src ./venv/bin/ruff check src/label_print_server tests/
+PYTHONPATH=src ./venv/bin/python -m unittest -v tests.test_label_print_server tests.test_printer_client
 ```
+
+`tests/test_printer_client.py` は `niimprint` を fake module に差し替えてリトライ挙動だけを検証するので、`niimprint` 自体がインストール/import 可能である必要はありません。実機に印刷する場合のみ、起動時に `PYTHONPATH` へ `niimprint/` を含める必要があります（`bin/start_label_print_server.sh` は対応済み）。
 
 ## 次の段階
 
-phase 2 では preview 済みデータを `niimprint` に渡す adapter を追加し、印刷成功時だけ dequeue する想定です。
+印刷まで一通り実装できたので、残っているのはプリンタの生存監視（heartbeat）と、Web UI からの同期的な Print 操作に依存しないバックグラウンド印刷キューです。
