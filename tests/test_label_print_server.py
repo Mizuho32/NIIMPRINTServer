@@ -16,6 +16,19 @@ class FakeRenderer:
         return f"{template.name}:{data['name']}:{data['name_line']}".encode()
 
 
+class FakePrintClient:
+    def __init__(self, fail_times: int = 0, error_message: str = "printer offline"):
+        self.calls: list[tuple[str, bytes]] = []
+        self.fail_times = fail_times
+        self.error_message = error_message
+
+    def print_label(self, printer, image_bytes):
+        self.calls.append((printer.name, image_bytes))
+        if self.fail_times > 0:
+            self.fail_times -= 1
+            raise RuntimeError(self.error_message)
+
+
 class LabelPrintServerTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -56,11 +69,13 @@ def summary_text(data):
         self.config_path = root / "config.json"
         self.config_path.write_text(json.dumps(config), encoding="utf-8")
         self.database_path = root / "jobs.sqlite3"
+        self.print_client = FakePrintClient()
         self.client = TestClient(
             create_app(
                 self.config_path,
                 self.database_path,
                 render_client=FakeRenderer(),
+                print_client=self.print_client,
             )
         )
 
@@ -175,6 +190,79 @@ def summary_text(data):
         self.assertIn('href="/jobs/2"', response.text)
 
         response = self.client.post("/jobs/dequeue-all", follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("No queued jobs yet.", response.text)
+
+    def test_print_dequeues_job_on_success(self) -> None:
+        self.client.post(
+            "/api/jobs",
+            json={"id": "000-018", "name": "PrintMe"},
+        )
+        self.client.post(
+            "/jobs/1/preview-from-list",
+            data={"selected_template": "Label", "selected_printer": "printer-a"},
+            follow_redirects=True,
+        )
+
+        response = self.client.post("/jobs/1/print", follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("No queued jobs yet.", response.text)
+        self.assertEqual(len(self.print_client.calls), 1)
+        self.assertEqual(self.print_client.calls[0][0], "printer-a")
+
+    def test_print_all_dequeues_rendered_jobs_and_leaves_others_queued(self) -> None:
+        self.client.post(
+            "/api/jobs",
+            json=[
+                {"id": "000-021", "name": "First"},
+                {"id": "000-022", "name": "Second"},
+            ],
+        )
+        self.client.post("/jobs/render-all", follow_redirects=True)
+        self.print_client.fail_times = 1
+
+        response = self.client.post("/jobs/print-all", follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(self.print_client.calls), 2)
+
+        jobs_response = self.client.get("/api/jobs")
+        remaining = jobs_response.json()["jobs"]
+        self.assertEqual(len(remaining), 1)
+        self.assertIn("printer offline", response.text)
+
+    def test_print_without_preview_shows_error(self) -> None:
+        self.client.post(
+            "/api/jobs",
+            json={"id": "000-019", "name": "NoPreview"},
+        )
+
+        response = self.client.post("/jobs/1/print")
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("Render a preview before printing.", response.text)
+        self.assertEqual(self.print_client.calls, [])
+
+        jobs_response = self.client.get("/api/jobs")
+        self.assertEqual(len(jobs_response.json()["jobs"]), 1)
+
+    def test_print_failure_keeps_job_queued_with_error(self) -> None:
+        self.client.post(
+            "/api/jobs",
+            json={"id": "000-020", "name": "Flaky"},
+        )
+        self.client.post(
+            "/jobs/1/preview-from-list",
+            data={"selected_template": "Label", "selected_printer": "printer-a"},
+            follow_redirects=True,
+        )
+        self.print_client.fail_times = 1
+
+        response = self.client.post("/jobs/1/print-from-list", follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("printer offline", response.text)
+        jobs_response = self.client.get("/api/jobs")
+        self.assertEqual(len(jobs_response.json()["jobs"]), 1)
+
+        response = self.client.post("/jobs/1/print-from-list", follow_redirects=True)
         self.assertEqual(response.status_code, 200)
         self.assertIn("No queued jobs yet.", response.text)
 

@@ -55,6 +55,17 @@ class JobStore:
                 );
                 """
             )
+            existing_columns = {
+                row["name"]
+                for row in connection.execute(
+                    "PRAGMA table_info(session_overrides)"
+                ).fetchall()
+            }
+            if "print_error" not in existing_columns:
+                connection.execute(
+                    "ALTER TABLE session_overrides ADD COLUMN print_error TEXT"
+                )
+            connection.commit()
 
     def create_job(
         self,
@@ -143,6 +154,7 @@ class JobStore:
         selected_printer: str,
         preview_data_url: str | None = None,
         render_error: str | None = None,
+        print_error: str | None = None,
     ) -> None:
         with closing(self._connect()) as connection:
             connection.execute(
@@ -155,15 +167,17 @@ class JobStore:
                     selected_printer,
                     preview_html,
                     render_error,
+                    print_error,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_id, job_id) DO UPDATE SET
                     data_json = excluded.data_json,
                     selected_template = excluded.selected_template,
                     selected_printer = excluded.selected_printer,
                     preview_html = excluded.preview_html,
                     render_error = excluded.render_error,
+                    print_error = excluded.print_error,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -174,6 +188,7 @@ class JobStore:
                     selected_printer,
                     preview_data_url,
                     render_error,
+                    print_error,
                     _utc_now(),
                 ),
             )
@@ -243,5 +258,6 @@ class JobStore:
             "selected_printer": row["selected_printer"],
             "preview_data_url": row["preview_html"],
             "render_error": row["render_error"],
+            "print_error": row["print_error"],
             "updated_at": row["updated_at"],
         }

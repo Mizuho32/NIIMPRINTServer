@@ -19,6 +19,7 @@ from label_print_server.pipeline import (
     parse_transform_input,
     resolve_initial_jobs,
 )
+from label_print_server.printer_client import NiimprintPrintClient, PrintClient
 from label_print_server.storage import JobStore
 
 TEMPLATES = Jinja2Templates(
@@ -96,6 +97,16 @@ def _preview_data_url(image_bytes: bytes) -> str:
     return f"data:image/png;base64,{encoded}"
 
 
+def _preview_image_bytes(override: dict[str, Any] | None) -> bytes | None:
+    if override is None:
+        return None
+    data_url = override.get("preview_data_url")
+    if not data_url:
+        return None
+    _, _, encoded = data_url.partition(",")
+    return base64.b64decode(encoded)
+
+
 def _render_jobs_page(
     request: Request,
     *,
@@ -129,6 +140,7 @@ def _render_jobs_page(
                     None if override is None else override["preview_data_url"]
                 ),
                 "render_error": None if override is None else override["render_error"],
+                "print_error": None if override is None else override["print_error"],
             }
         )
 
@@ -179,6 +191,7 @@ def _render_job_page(
             ),
             "render_error": error
             or (None if override is None else override["render_error"]),
+            "print_error": None if override is None else override["print_error"],
         },
         status_code=status_code,
     )
@@ -264,7 +277,52 @@ def _render_and_store_preview(
         selected_printer=selected_printer,
         preview_data_url=_preview_data_url(image_bytes),
         render_error=None,
+        print_error=None,
     )
+
+
+def _print_and_dequeue(
+    *,
+    config: AppConfig,
+    store: JobStore,
+    print_client: PrintClient,
+    session_id: str,
+    job_id: int,
+    data: dict[str, Any],
+    selected_template: str,
+    selected_printer: str,
+    override: dict[str, Any] | None,
+) -> str | None:
+    """Print the currently-rendered preview and dequeue on success.
+
+    Returns an error message on failure (and persists it on the session
+    override so it survives the redirect); returns None on success, after
+    the job has been deleted from the queue.
+    """
+    image_bytes = _preview_image_bytes(override)
+    if image_bytes is None:
+        error = "Render a preview before printing."
+    else:
+        try:
+            printer_config = config.printer_by_name(selected_printer)
+            print_client.print_label(printer_config, image_bytes)
+        except (KeyError, ValueError, RuntimeError) as exc:
+            error = str(exc)
+        else:
+            store.delete_job(job_id)
+            return None
+
+    store.save_session_override(
+        session_id=session_id,
+        job_id=job_id,
+        data=data,
+        selected_template=selected_template,
+        selected_printer=selected_printer,
+        preview_data_url=None if override is None else override["preview_data_url"],
+        render_error=None if override is None else override["render_error"],
+        print_error=error,
+    )
+    return error
 
 
 def create_app(
@@ -272,6 +330,7 @@ def create_app(
     database_path: str | Path | None = None,
     *,
     render_client: JsReportClient | None = None,
+    print_client: PrintClient | None = None,
     store: JobStore | None = None,
 ) -> FastAPI:
     config = load_config(config_path)
@@ -282,6 +341,7 @@ def create_app(
     )
     job_store = store or JobStore(effective_database)
     report_client = render_client or JsReportClient(config.jsreport_url)
+    printer_client = print_client or NiimprintPrintClient(config.retry)
 
     app = FastAPI(title=config.app_name)
     app.add_middleware(SessionMiddleware, secret_key=config.session_secret)
@@ -404,6 +464,30 @@ def create_app(
                 )
         return RedirectResponse("/jobs", status_code=status.HTTP_303_SEE_OTHER)
 
+    @app.post("/jobs/print-all")
+    async def print_all_jobs(request: Request) -> RedirectResponse:
+        session_id = _ensure_session_id(request)
+        jobs = job_store.list_jobs()
+        overrides = job_store.list_session_overrides(session_id)
+        for job in jobs:
+            override = overrides.get(job["id"])
+            data, selected_template, selected_printer = _resolve_editor_state(
+                job,
+                override,
+            )
+            _print_and_dequeue(
+                config=config,
+                store=job_store,
+                print_client=printer_client,
+                session_id=session_id,
+                job_id=job["id"],
+                data=data,
+                selected_template=selected_template,
+                selected_printer=selected_printer,
+                override=override,
+            )
+        return RedirectResponse("/jobs", status_code=status.HTTP_303_SEE_OTHER)
+
     @app.post("/jobs/{job_id}/preview-from-list")
     async def render_preview_from_list(
         request: Request,
@@ -459,6 +543,27 @@ def create_app(
                 preview_data_url=None,
                 render_error=str(exc),
             )
+        return RedirectResponse("/jobs", status_code=status.HTTP_303_SEE_OTHER)
+
+    @app.post("/jobs/{job_id}/print-from-list")
+    async def print_job_from_list(request: Request, job_id: int) -> RedirectResponse:
+        session_id = _ensure_session_id(request)
+        job = job_store.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        override = job_store.get_session_override(session_id, job_id)
+        data, selected_template, selected_printer = _resolve_editor_state(job, override)
+        _print_and_dequeue(
+            config=config,
+            store=job_store,
+            print_client=printer_client,
+            session_id=session_id,
+            job_id=job_id,
+            data=data,
+            selected_template=selected_template,
+            selected_printer=selected_printer,
+            override=override,
+        )
         return RedirectResponse("/jobs", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/jobs/{job_id}/draft", response_class=HTMLResponse)
@@ -549,6 +654,36 @@ def create_app(
 
         override = job_store.get_session_override(session_id, job_id)
         return _render_job_page(request, config=config, job=job, override=override)
+
+    @app.post("/jobs/{job_id}/print", response_class=HTMLResponse)
+    async def print_job(request: Request, job_id: int) -> HTMLResponse:
+        session_id = _ensure_session_id(request)
+        job = job_store.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        override = job_store.get_session_override(session_id, job_id)
+        data, selected_template, selected_printer = _resolve_editor_state(job, override)
+        error = _print_and_dequeue(
+            config=config,
+            store=job_store,
+            print_client=printer_client,
+            session_id=session_id,
+            job_id=job_id,
+            data=data,
+            selected_template=selected_template,
+            selected_printer=selected_printer,
+            override=override,
+        )
+        if error is None:
+            return RedirectResponse("/jobs", status_code=status.HTTP_303_SEE_OTHER)
+        override = job_store.get_session_override(session_id, job_id)
+        return _render_job_page(
+            request,
+            config=config,
+            job=job,
+            override=override,
+            response_status=status.HTTP_502_BAD_GATEWAY,
+        )
 
     @app.post("/jobs/{job_id}/clear-session")
     async def clear_session_draft(job_id: int, request: Request) -> RedirectResponse:

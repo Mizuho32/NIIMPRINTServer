@@ -11,6 +11,8 @@ class PrinterConfig:
     name: str
     model: str
     address: str | None = None
+    connection: str = "bluetooth"
+    density: int = 5
 
 
 @dataclass(frozen=True)
@@ -30,6 +32,12 @@ class SelectionConfig:
 
 
 @dataclass(frozen=True)
+class RetryConfig:
+    max_attempts: int = 3
+    delay_seconds: float = 1.0
+
+
+@dataclass(frozen=True)
 class AppConfig:
     app_name: str
     config_path: Path
@@ -42,12 +50,19 @@ class AppConfig:
     printers: tuple[PrinterConfig, ...]
     templates: tuple[TemplateConfig, ...]
     selection: SelectionConfig
+    retry: RetryConfig
 
     def printer_names(self) -> tuple[str, ...]:
         return tuple(printer.name for printer in self.printers)
 
     def template_names(self) -> tuple[str, ...]:
         return tuple(template.name for template in self.templates)
+
+    def printer_by_name(self, name: str) -> PrinterConfig:
+        for printer in self.printers:
+            if printer.name == name:
+                return printer
+        raise KeyError(f"Unknown printer: {name}")
 
     def template_by_name(self, name: str) -> TemplateConfig:
         for template in self.templates:
@@ -71,6 +86,8 @@ def load_config(path: str | Path) -> AppConfig:
             name=item["name"],
             model=item["model"],
             address=item.get("address"),
+            connection=item.get("connection", "bluetooth"),
+            density=item.get("density", 5),
         )
         for item in raw.get("printers", [])
     )
@@ -88,6 +105,7 @@ def load_config(path: str | Path) -> AppConfig:
         for item in raw.get("templates", [])
     )
     selection_raw = raw.get("selection", {})
+    retry_raw = raw.get("retry", {})
     database_path = _resolve_path(
         base_dir,
         raw.get("database_path", "label_print_server.sqlite3"),
@@ -113,6 +131,10 @@ def load_config(path: str | Path) -> AppConfig:
             default_template=selection_raw.get("default_template"),
             printer_selector=selection_raw.get("printer_selector"),
             template_selector=selection_raw.get("template_selector"),
+        ),
+        retry=RetryConfig(
+            max_attempts=retry_raw.get("max_attempts", 3),
+            delay_seconds=retry_raw.get("delay_seconds", 1.0),
         ),
     )
 

@@ -26,8 +26,23 @@
       <form method="post" action="/jobs/render-all">
         <button type="submit" class='render'>Render all queued jobs</button>
       </form>
+      <form method="post" action="/jobs/print-all">
+        <button
+          type="submit"
+          class="print"
+          onclick="return confirm('Queue上の全 job を印刷します(未レンダリングの job はスキップされます)。よろしいですか?');"
+        >
+          Print all queued jobs
+        </button>
+      </form>
       <form method="post" action="/jobs/dequeue-all">
-        <button type="submit" class="warning">Dequeue all</button>
+        <button
+          type="submit"
+          class="warning"
+          onclick="return confirm('Queue上の全 job を dequeue します。よろしいですか?');"
+        >
+          Dequeue all
+        </button>
       </form>
     </div>
     <table>
@@ -37,13 +52,14 @@
           <th>Text</th>
           <th>Template</th>
           <th>Printer</th>
-          <th>Render</th>
+          <th>Render / Print</th>
           <th>Thumb</th>
         </tr>
       </thead>
       <tbody>
         {% for job in jobs %}
           <form id="job-render-{{ job.id }}" method="post" action="/jobs/{{ job.id }}/preview-from-list"></form>
+          <form id="job-print-{{ job.id }}" method="post" action="/jobs/{{ job.id }}/print-from-list"></form>
           <tr>
             <td><a href="/jobs/{{ job.id }}">#{{ job.id }}</a></td>
             <td>{{ job.summary_text }}</td>
@@ -70,10 +86,19 @@
                 <button type="submit" form="job-render-{{ job.id }}" class='render'>Render</button>
                 <button
                   type="submit"
+                  form="job-print-{{ job.id }}"
+                  class="print"
+                  onclick="return confirm({% if job.preview_data_url %}'印刷します。よろしいですか?'{% else %}'このjobはまだレンダリングされていません。それでも印刷しますか?'{% endif %});"
+                >
+                  Print
+                </button>
+                <button
+                  type="submit"
                   form="job-render-{{ job.id }}"
                   formaction="/jobs/{{ job.id }}/dequeue"
                   formmethod="post"
                   class="warning"
+                  onclick="return confirm('この job を dequeue します。よろしいですか?');"
                 >
                   Dequeue
                 </button>
@@ -90,6 +115,9 @@
                 />
               {% else %}
                 <span class="hint">No preview</span>
+              {% endif %}
+              {% if job.print_error %}
+                <div class="error">{{ job.print_error }}</div>
               {% endif %}
             </td>
           </tr>

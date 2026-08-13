@@ -11,6 +11,9 @@
     {% if render_error %}
       <p class="error">{{ render_error }}</p>
     {% endif %}
+    {% if print_error %}
+      <p class="error">Print failed: {{ print_error }}</p>
+    {% endif %}
     <form method="post" action="/jobs/{{ job.id }}/preview">
       <div class="card">
         <label for="selected_template"><strong>Template</strong></label>
@@ -76,5 +79,21 @@
     {% else %}
       <p class="hint">まだ preview は生成されていません。</p>
     {% endif %}
+    <p class="hint">
+      Print は今表示されている preview をそのまま {{ selected_printer }} に送ります。
+      成功すると job は Queue から削除されます。
+    </p>
+    <form method="post" action="/jobs/{{ job.id }}/print">
+      <div class="actions">
+        <button
+          type="submit"
+          class="print"
+          {% if not preview_data_url %}disabled{% endif %}
+          onclick="return confirm('印刷します。よろしいですか?');"
+        >
+          Print
+        </button>
+      </div>
+    </form>
   </section>
 {% endblock %}
