@@ -23,4 +23,5 @@ JSREPORT_PID="$!"
 exec env PYTHONPATH="${ROOT_DIR}/src" "${ROOT_DIR}/venv/bin/python" -m label_print_server \
   --config "${ROOT_DIR}/src/label_print_server/config.example.json" \
   --database "${ROOT_DIR}/label_print_server.sqlite3" \
+  --host 0.0.0.0 \
   "$@"
