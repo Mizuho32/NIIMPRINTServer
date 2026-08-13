@@ -72,13 +72,13 @@ body {
 }
 
 .id {
-  font-size: 1.1em;
+  font-size: 1.4em;
   font-weight: bold;
   line-height: 1.05;
   white-space: nowrap;
 }
 
 .location {
-  font-size: 1.2em;
+  font-size: 1.6em;
   line-height: 1.1;
 }
