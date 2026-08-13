@@ -1,6 +1,7 @@
 mise*.toml
 config*.json
 label_print_server.sqlite3
+*hook*.py
 .*.swp
 
 __pycache__/
