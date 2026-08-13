@@ -36,10 +36,11 @@ class AppConfig:
     database_path: Path
     session_secret: str
     jsreport_url: str
+    debug: bool
     summary_key: str | None
+    user_hooks_path: Path | None
     printers: tuple[PrinterConfig, ...]
     templates: tuple[TemplateConfig, ...]
-    transforms: tuple[dict[str, str], ...]
     selection: SelectionConfig
 
     def printer_names(self) -> tuple[str, ...]:
@@ -47,12 +48,6 @@ class AppConfig:
 
     def template_names(self) -> tuple[str, ...]:
         return tuple(template.name for template in self.templates)
-
-    def printer_by_name(self, name: str) -> PrinterConfig:
-        for printer in self.printers:
-            if printer.name == name:
-                return printer
-        raise KeyError(f"Unknown printer: {name}")
 
     def template_by_name(self, name: str) -> TemplateConfig:
         for template in self.templates:
@@ -97,10 +92,6 @@ def load_config(path: str | Path) -> AppConfig:
         base_dir,
         raw.get("database_path", "label_print_server.sqlite3"),
     )
-    transforms = tuple(
-        {"name": item["name"], "template": item["template"]}
-        for item in raw.get("transforms", [])
-    )
 
     return AppConfig(
         app_name=raw.get("app_name", "NIIM Label Print Server"),
@@ -108,10 +99,15 @@ def load_config(path: str | Path) -> AppConfig:
         database_path=database_path,
         session_secret=raw.get("session_secret", "change-me"),
         jsreport_url=raw.get("jsreport_url", "http://127.0.0.1:5488"),
+        debug=raw.get("debug", False),
         summary_key=raw.get("summary_key", "name"),
+        user_hooks_path=(
+            _resolve_path(base_dir, raw["user_hooks_path"])
+            if raw.get("user_hooks_path")
+            else None
+        ),
         printers=printers,
         templates=templates,
-        transforms=transforms,
         selection=SelectionConfig(
             default_printer=selection_raw.get("default_printer"),
             default_template=selection_raw.get("default_template"),

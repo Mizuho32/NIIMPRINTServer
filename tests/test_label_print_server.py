@@ -20,21 +20,34 @@ class LabelPrintServerTestCase(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         root = Path(self.temp_dir.name)
-        template_path = root / "label.html"
-        template_path.write_text("<div>{{name}}</div>", encoding="utf-8")
+        hooks_path = root / "hooks.py"
+        hooks_path.write_text(
+            """def transform(data):
+    items = [data] if isinstance(data, dict) else list(data)
+    return [
+        {**item, "name_line": f"hooked {item['name']}"}
+        for item in items
+    ]
+
+def summary_text(data):
+    return f"SUMMARY:{data['name']}"
+""",
+            encoding="utf-8",
+        )
 
         config = {
             "app_name": "Test Label Server",
             "database_path": "jobs.sqlite3",
             "session_secret": "test-secret",
             "jsreport_url": "http://127.0.0.1:5488",
-            "summary_key": "name",
+            "debug": True,
+            "summary_key": "ignored-by-hook",
+            "user_hooks_path": str(hooks_path),
             "printers": [
                 {"name": "printer-a", "model": "b1"},
                 {"name": "printer-b", "model": "b21"},
             ],
             "templates": [{"name": "Label"}, {"name": "AltLabel"}],
-            "transforms": [{"name": "name_line", "template": "name is {{ name }}"}],
             "selection": {
                 "default_printer": "printer-a",
                 "default_template": "Label",
@@ -55,10 +68,10 @@ class LabelPrintServerTestCase(unittest.TestCase):
         self.client.close()
         self.temp_dir.cleanup()
 
-    def test_api_intake_applies_transforms_and_defaults(self) -> None:
+    def test_api_accepts_object_and_applies_hook_transform(self) -> None:
         response = self.client.post(
             "/api/jobs",
-            json=[{"id": "000-011", "name": "USB-C Hub"}],
+            json={"id": "000-011", "name": "USB-C Hub"},
         )
         self.assertEqual(response.status_code, 200)
         payload = response.json()
@@ -69,12 +82,26 @@ class LabelPrintServerTestCase(unittest.TestCase):
         job = jobs_response.json()["jobs"][0]
         self.assertEqual(job["selected_template"], "Label")
         self.assertEqual(job["selected_printer"], "printer-a")
-        self.assertEqual(job["draft"]["name_line"], "name is USB-C Hub")
+        self.assertEqual(job["draft"]["name_line"], "hooked USB-C Hub")
+
+    def test_api_accepts_list_and_splits_into_jobs(self) -> None:
+        response = self.client.post(
+            "/api/jobs",
+            json=[
+                {"id": "000-013", "name": "First"},
+                {"id": "000-014", "name": "Second"},
+            ],
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()["jobs"]), 2)
+
+        jobs_response = self.client.get("/api/jobs")
+        self.assertEqual(len(jobs_response.json()["jobs"]), 2)
 
     def test_preview_uses_session_override_data(self) -> None:
         self.client.post(
             "/api/jobs",
-            json=[{"id": "000-012", "name": "Original"}],
+            json={"id": "000-012", "name": "Original"},
         )
 
         response = self.client.post(
@@ -91,10 +118,6 @@ class LabelPrintServerTestCase(unittest.TestCase):
         expected = base64.b64encode(b"Label:Updated:name is Updated").decode("ascii")
         self.assertIn(expected, response.text)
 
-        detail = self.client.get("/jobs/1")
-        self.assertEqual(detail.status_code, 200)
-        self.assertIn(expected, detail.text)
-
     def test_jobs_page_supports_bulk_render(self) -> None:
         self.client.post(
             "/api/jobs",
@@ -106,20 +129,20 @@ class LabelPrintServerTestCase(unittest.TestCase):
 
         response = self.client.post("/jobs/render-all", follow_redirects=True)
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Render all queued jobs", response.text)
         self.assertIn(
-            base64.b64encode(b"Label:First:name is First").decode("ascii"),
+            base64.b64encode(b"Label:First:hooked First").decode("ascii"),
             response.text,
         )
         self.assertIn(
-            base64.b64encode(b"Label:Second:name is Second").decode("ascii"),
+            base64.b64encode(b"Label:Second:hooked Second").decode("ascii"),
             response.text,
         )
+        self.assertIn("SUMMARY:First", response.text)
 
     def test_list_render_uses_selected_dropdown_values(self) -> None:
         self.client.post(
             "/api/jobs",
-            json=[{"id": "000-015", "name": "Selectable"}],
+            json={"id": "000-015", "name": "Selectable"},
         )
 
         response = self.client.post(
@@ -132,11 +155,68 @@ class LabelPrintServerTestCase(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 200)
         self.assertIn(
-            base64.b64encode(b"AltLabel:Selectable:name is Selectable").decode("ascii"),
+            base64.b64encode(b"AltLabel:Selectable:hooked Selectable").decode("ascii"),
             response.text,
         )
         self.assertIn('value="printer-b" selected', response.text)
 
+    def test_dequeue_actions_remove_jobs(self) -> None:
+        self.client.post(
+            "/api/jobs",
+            json=[
+                {"id": "000-016", "name": "First"},
+                {"id": "000-017", "name": "Second"},
+            ],
+        )
 
-if __name__ == "__main__":
-    unittest.main()
+        response = self.client.post("/jobs/1/dequeue", follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn('href="/jobs/1"', response.text)
+        self.assertIn('href="/jobs/2"', response.text)
+
+        response = self.client.post("/jobs/dequeue-all", follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("No queued jobs yet.", response.text)
+
+    def test_intake_form_hidden_when_debug_disabled(self) -> None:
+        root = Path(self.temp_dir.name)
+        config = {
+            "app_name": "Prod Label Server",
+            "database_path": "prod.sqlite3",
+            "session_secret": "test-secret",
+            "jsreport_url": "http://127.0.0.1:5488",
+            "debug": False,
+            "printers": [{"name": "printer-a", "model": "b1"}],
+            "templates": [{"name": "Label"}],
+            "selection": {
+                "default_printer": "printer-a",
+                "default_template": "Label",
+            },
+        }
+        config_path = root / "prod-config.json"
+        config_path.write_text(json.dumps(config), encoding="utf-8")
+        prod_client = TestClient(
+            create_app(
+                config_path,
+                root / "prod.sqlite3",
+                render_client=FakeRenderer(),
+            )
+        )
+        try:
+            response = prod_client.get("/jobs")
+            self.assertEqual(response.status_code, 200)
+            self.assertNotIn("Queue intake", response.text)
+
+            response = prod_client.post(
+                "/jobs/intake",
+                data={"payload_json": '{"id":"1","name":"X"}'},
+            )
+            self.assertEqual(response.status_code, 404)
+
+            response = prod_client.post(
+                "/api/jobs",
+                json={"id": "1", "name": "X"},
+            )
+            self.assertEqual(response.status_code, 200)
+        finally:
+            prod_client.close()

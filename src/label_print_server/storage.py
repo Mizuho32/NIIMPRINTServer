@@ -21,6 +21,7 @@ class JobStore:
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self.database_path)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
         return connection
 
     def ensure_schema(self) -> None:
@@ -203,6 +204,18 @@ class JobStore:
                 """,
                 (session_id, job_id),
             )
+            connection.commit()
+
+    def delete_job(self, job_id: int) -> None:
+        with closing(self._connect()) as connection:
+            connection.execute("DELETE FROM session_overrides WHERE job_id = ?", (job_id,))
+            connection.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+            connection.commit()
+
+    def delete_all_jobs(self) -> None:
+        with closing(self._connect()) as connection:
+            connection.execute("DELETE FROM session_overrides")
+            connection.execute("DELETE FROM jobs")
             connection.commit()
 
     @staticmethod

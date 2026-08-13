@@ -13,7 +13,12 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from label_print_server.config import AppConfig, dump_json, load_config
 from label_print_server.jsreport_client import JsReportClient
-from label_print_server.pipeline import resolve_initial_job
+from label_print_server.pipeline import (
+    load_summary_hook,
+    load_transform_hook,
+    parse_transform_input,
+    resolve_initial_jobs,
+)
 from label_print_server.storage import JobStore
 
 TEMPLATES = Jinja2Templates(
@@ -29,29 +34,25 @@ def _ensure_session_id(request: Request) -> str:
     return session_id
 
 
-def _parse_payload_list(raw_text: str) -> list[dict[str, Any]]:
+def _parse_payload_input(raw_text: str) -> dict[str, Any] | list[Any]:
     try:
         payload = json.loads(raw_text)
     except json.JSONDecodeError as exc:
         raise ValueError(f"Invalid JSON: {exc.msg}") from exc
-    if not isinstance(payload, list):
-        raise TypeError("Expected a JSON array")
-    if not all(isinstance(item, dict) for item in payload):
-        raise TypeError("Expected an array of JSON objects")
-    return payload
+    return parse_transform_input(payload)
 
 
-def _parse_payload_object(raw_text: str) -> dict[str, Any]:
-    try:
-        payload = json.loads(raw_text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Invalid JSON: {exc.msg}") from exc
-    if not isinstance(payload, dict):
-        raise TypeError("Expected a JSON object")
-    return payload
-
-
-def _job_summary(job_data: dict[str, Any], summary_key: str | None) -> str:
+def _job_summary(
+    job_data: dict[str, Any],
+    summary_key: str | None,
+    summary_hook: Any,
+) -> str:
+    if summary_hook is not None:
+        summary_value = summary_hook(job_data)
+        if not isinstance(summary_value, str):
+            raise TypeError("summary_text must return a string")
+        if summary_value:
+            return summary_value
     if summary_key:
         value = job_data.get(summary_key)
         if value:
@@ -65,10 +66,11 @@ def _job_summary(job_data: dict[str, Any], summary_key: str | None) -> str:
 
 def _fallback_job_summary(job: dict[str, Any]) -> str:
     payload = job["payload"]
-    for key in ("name", "id", "title", "label"):
-        value = payload.get(key)
-        if value:
-            return str(value)
+    if isinstance(payload, dict):
+        for key in ("name", "id", "title", "label"):
+            value = payload.get(key)
+            if value:
+                return str(value)
     return dump_json(payload).replace("\n", " ")[:60]
 
 
@@ -100,6 +102,7 @@ def _render_jobs_page(
     session_id: str,
     config: AppConfig,
     store: JobStore,
+    summary_hook: Any,
     payload_text: str = "[]",
     error: str | None = None,
 ) -> HTMLResponse:
@@ -109,7 +112,10 @@ def _render_jobs_page(
     for job in jobs:
         override = overrides.get(job["id"])
         data, selected_template, selected_printer = _resolve_editor_state(job, override)
-        summary_text = _job_summary(data, config.summary_key)
+        try:
+            summary_text = _job_summary(data, config.summary_key, summary_hook)
+        except TypeError:
+            summary_text = _fallback_job_summary(job)
         if not summary_text:
             summary_text = _fallback_job_summary(job)
         job_cards.append(
@@ -136,6 +142,7 @@ def _render_jobs_page(
             "error": error,
             "templates": config.template_names(),
             "printers": config.printer_names(),
+            "debug": config.debug,
         },
         status_code=status.HTTP_400_BAD_REQUEST if error else status.HTTP_200_OK,
     )
@@ -190,7 +197,9 @@ async def _read_editor_submission(
     job: dict[str, Any],
 ) -> tuple[dict[str, Any], str, str]:
     form = await request.form()
-    data = _parse_payload_object(str(form.get("data_json", "")))
+    data = json.loads(str(form.get("data_json", "")))
+    if not isinstance(data, dict):
+        raise TypeError("Expected a JSON object")
     selected_template = _validate_selection(
         str(form.get("selected_template", job["selected_template"])),
         config.template_names(),
@@ -207,28 +216,26 @@ async def _read_editor_submission(
 def _enqueue_jobs(
     store: JobStore,
     config: AppConfig,
-    payloads: list[dict[str, Any]],
+    payload_input: dict[str, Any] | list[Any],
+    transform_hook: Any,
 ) -> dict[str, Any]:
     batch_id = uuid4().hex[:12]
     jobs = []
-    for index, payload in enumerate(payloads, start=1):
-        draft, selected_template, selected_printer = resolve_initial_job(
-            payload,
-            config,
-        )
+    resolved_jobs = resolve_initial_jobs(payload_input, config, transform_hook)
+    for index, job_spec in enumerate(resolved_jobs, start=1):
         job_id = store.create_job(
             batch_id=batch_id,
             batch_index=index,
-            payload=payload,
-            draft=draft,
-            selected_template=selected_template,
-            selected_printer=selected_printer,
+            payload=job_spec["payload"],
+            draft=job_spec["draft"],
+            selected_template=job_spec["selected_template"],
+            selected_printer=job_spec["selected_printer"],
         )
         jobs.append(
             {
                 "id": job_id,
-                "selected_template": selected_template,
-                "selected_printer": selected_printer,
+                "selected_template": job_spec["selected_template"],
+                "selected_printer": job_spec["selected_printer"],
             }
         )
     return {"batch_id": batch_id, "jobs": jobs}
@@ -268,6 +275,8 @@ def create_app(
     store: JobStore | None = None,
 ) -> FastAPI:
     config = load_config(config_path)
+    transform_hook = load_transform_hook(config.user_hooks_path)
+    summary_hook = load_summary_hook(config.user_hooks_path)
     effective_database = (
         Path(database_path) if database_path is not None else config.database_path
     )
@@ -276,9 +285,6 @@ def create_app(
 
     app = FastAPI(title=config.app_name)
     app.add_middleware(SessionMiddleware, secret_key=config.session_secret)
-    app.state.config = config
-    app.state.store = job_store
-    app.state.render_client = report_client
 
     @app.get("/", response_class=HTMLResponse)
     @app.get("/jobs", response_class=HTMLResponse)
@@ -289,30 +295,46 @@ def create_app(
             session_id=session_id,
             config=config,
             store=job_store,
+            summary_hook=summary_hook,
         )
 
     @app.post("/jobs/intake", response_class=HTMLResponse)
     async def intake_jobs_form(request: Request) -> HTMLResponse:
         session_id = _ensure_session_id(request)
+        if not config.debug:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
         form = await request.form()
         payload_text = str(form.get("payload_json", ""))
         try:
-            payloads = _parse_payload_list(payload_text)
+            payload_input = _parse_payload_input(payload_text)
+            _enqueue_jobs(job_store, config, payload_input, transform_hook)
         except (TypeError, ValueError) as exc:
             return _render_jobs_page(
                 request,
                 session_id=session_id,
                 config=config,
                 store=job_store,
+                summary_hook=summary_hook,
                 payload_text=payload_text,
                 error=str(exc),
             )
-        _enqueue_jobs(job_store, config, payloads)
         return RedirectResponse("/jobs", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/api/jobs")
-    async def intake_jobs_api(payloads: list[dict[str, Any]]) -> JSONResponse:
-        result = _enqueue_jobs(job_store, config, payloads)
+    async def intake_jobs_api(request: Request) -> JSONResponse:
+        try:
+            payload_input = parse_transform_input(await request.json())
+            result = _enqueue_jobs(job_store, config, payload_input, transform_hook)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid JSON: {exc.msg}",
+            ) from exc
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
         return JSONResponse(result)
 
     @app.get("/api/jobs")
@@ -334,6 +356,19 @@ def create_app(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
         override = job_store.get_session_override(session_id, job_id)
         return _render_job_page(request, config=config, job=job, override=override)
+
+    @app.post("/jobs/dequeue-all")
+    async def dequeue_all_jobs() -> RedirectResponse:
+        job_store.delete_all_jobs()
+        return RedirectResponse("/jobs", status_code=status.HTTP_303_SEE_OTHER)
+
+    @app.post("/jobs/{job_id}/dequeue")
+    async def dequeue_job(job_id: int) -> RedirectResponse:
+        job = job_store.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        job_store.delete_job(job_id)
+        return RedirectResponse("/jobs", status_code=status.HTTP_303_SEE_OTHER)
 
     @app.post("/jobs/render-all")
     async def render_all_jobs(request: Request) -> RedirectResponse:
@@ -438,7 +473,7 @@ def create_app(
                 config=config,
                 job=job,
             )
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
             override = job_store.get_session_override(session_id, job_id)
             return _render_job_page(
                 request,
@@ -472,7 +507,7 @@ def create_app(
                 config=config,
                 job=job,
             )
-        except (TypeError, ValueError) as exc:
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
             override = job_store.get_session_override(session_id, job_id)
             return _render_job_page(
                 request,

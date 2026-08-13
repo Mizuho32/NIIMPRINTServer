@@ -33,4 +33,7 @@ jsonオブジェクトのユーザー定義加工を容易に。(name: xxx→ "n
   - ユーザー定義挙動周りの推奨実装
   - 要件を満たす最適なUI設計
 
-### 結果
+## 2026-08-13 追加要件
+- Deque all, deque one (行にボタン追加)も
+- Queue intakeはデバッグモードの時のみ、かつjson POST APIも実装して。
+- transformsとsummary_keyの定義はjsonだとやっぱダルいので、(適当な)指定の場所にユーザーが.pyを配置したら、それを使うようにして(dict→dictとdict→strな関数を定義)。デフォルト挙動はsummary_keyはname, transformsは空で。
