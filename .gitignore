@@ -6,4 +6,5 @@ label_print_server.sqlite3
 
 __pycache__/
 /mds/local/
-/images/
+/data/
+/draft/
