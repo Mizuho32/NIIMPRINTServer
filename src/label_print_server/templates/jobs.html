@@ -24,7 +24,7 @@
     <h2>Queued jobs</h2>
     <div class="actions" style="margin-bottom: 16px;">
       <form method="post" action="/jobs/render-all">
-        <button type="submit">Render all queued jobs</button>
+        <button type="submit" class='render'>Render all queued jobs</button>
       </form>
       <form method="post" action="/jobs/dequeue-all">
         <button type="submit" class="warning">Dequeue all</button>
@@ -67,7 +67,7 @@
             </td>
             <td>
               <div class="actions">
-                <button type="submit" form="job-render-{{ job.id }}">Render</button>
+                <button type="submit" form="job-render-{{ job.id }}" class='render'>Render</button>
                 <button
                   type="submit"
                   form="job-render-{{ job.id }}"
