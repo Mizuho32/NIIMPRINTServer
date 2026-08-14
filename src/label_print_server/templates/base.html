@@ -119,5 +119,31 @@
     <main>
       {% block content %}{% endblock %}
     </main>
+    <script>
+      // Autosave print quantity as soon as it's changed, instead of only
+      // persisting it as a side effect of clicking Print. Without this,
+      // /jobs/print-all (which only ever reads the persisted quantity)
+      // silently ignores whatever is currently typed but not yet printed.
+      (function () {
+        var timers = {};
+        document.querySelectorAll("input[data-quantity-job-id]").forEach(function (input) {
+          var jobId = input.getAttribute("data-quantity-job-id");
+          input.addEventListener("input", function () {
+            clearTimeout(timers[jobId]);
+            var value = input.value;
+            timers[jobId] = setTimeout(function () {
+              fetch("/jobs/" + jobId + "/quantity", {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: "quantity=" + encodeURIComponent(value),
+              }).catch(function () {
+                // Best-effort: a failed autosave just means Print/Print all
+                // will fall back to the last successfully saved quantity.
+              });
+            }, 400);
+          });
+        });
+      })();
+    </script>
   </body>
 </html>

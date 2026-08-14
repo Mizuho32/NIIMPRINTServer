@@ -266,7 +266,7 @@ def summary_text(data):
         self.assertEqual(response.status_code, 200)
         self.assertIn("No queued jobs yet.", response.text)
 
-    def test_print_from_list_uses_submitted_quantity(self) -> None:
+    def test_saved_quantity_is_used_by_print_from_list(self) -> None:
         self.client.post(
             "/api/jobs",
             json={"id": "000-023", "name": "Multi"},
@@ -277,64 +277,54 @@ def summary_text(data):
             follow_redirects=True,
         )
 
-        response = self.client.post(
-            "/jobs/1/print-from-list",
-            data={"quantity": "3"},
-            follow_redirects=True,
-        )
+        quantity_response = self.client.post("/jobs/1/quantity", data={"quantity": "3"})
+        self.assertEqual(quantity_response.status_code, 200)
+        self.assertEqual(quantity_response.json(), {"quantity": 3})
+
+        response = self.client.post("/jobs/1/print-from-list", follow_redirects=True)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(self.print_client.calls), 1)
         self.assertEqual(self.print_client.calls[0][2], 3)
 
-    def test_print_from_list_rejects_invalid_quantity(self) -> None:
+    def test_saved_quantity_is_used_by_print_all(self) -> None:
+        # This is the bug this endpoint fixes: /jobs/print-all never reads
+        # a form (it prints every queued job unattended), so a quantity
+        # typed into the list page has to already be persisted - it can't
+        # be picked up from the print-all button click itself.
         self.client.post(
             "/api/jobs",
-            json={"id": "000-024", "name": "BadQty"},
+            json={"id": "000-024", "name": "BulkMulti"},
+        )
+        self.client.post("/jobs/render-all", follow_redirects=True)
+        self.client.post("/jobs/1/quantity", data={"quantity": "4"})
+
+        response = self.client.post("/jobs/print-all", follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(self.print_client.calls), 1)
+        self.assertEqual(self.print_client.calls[0][2], 4)
+
+    def test_quantity_endpoint_rejects_invalid_value(self) -> None:
+        self.client.post(
+            "/api/jobs",
+            json={"id": "000-025", "name": "BadQty"},
         )
         self.client.post(
             "/jobs/1/preview-from-list",
             data={"selected_template": "Label", "selected_printer": "printer-a"},
             follow_redirects=True,
         )
+        self.client.post("/jobs/1/quantity", data={"quantity": "5"})
 
-        response = self.client.post(
-            "/jobs/1/print-from-list",
-            data={"quantity": "0"},
-            follow_redirects=True,
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("Quantity must be between 1 and 100", response.text)
-        self.assertEqual(self.print_client.calls, [])
+        response = self.client.post("/jobs/1/quantity", data={"quantity": "0"})
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Quantity must be between 1 and 100", response.json()["detail"])
 
-        jobs_response = self.client.get("/api/jobs")
-        self.assertEqual(len(jobs_response.json()["jobs"]), 1)
-
-    def test_detail_print_uses_submitted_quantity(self) -> None:
-        self.client.post(
-            "/api/jobs",
-            json={"id": "000-025", "name": "DetailQty"},
-        )
-        self.client.post(
-            "/jobs/1/preview",
-            data={
-                "data_json": json.dumps(
-                    {"id": "000-025", "name": "DetailQty", "name_line": "x"}
-                ),
-                "selected_template": "Label",
-                "selected_printer": "printer-a",
-            },
-        )
-
-        response = self.client.post(
-            "/jobs/1/print",
-            data={"quantity": "5"},
-            follow_redirects=True,
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(self.print_client.calls), 1)
+        # The rejected update must not have overwritten the previously
+        # saved value.
+        self.client.post("/jobs/1/print-from-list", follow_redirects=True)
         self.assertEqual(self.print_client.calls[0][2], 5)
 
-    def test_print_defaults_to_quantity_one_when_omitted(self) -> None:
+    def test_print_defaults_to_quantity_one_when_never_saved(self) -> None:
         self.client.post(
             "/api/jobs",
             json={"id": "000-026", "name": "DefaultQty"},

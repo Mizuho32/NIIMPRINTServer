@@ -590,6 +590,47 @@ def create_app(
             )
         return RedirectResponse("/jobs", status_code=status.HTTP_303_SEE_OTHER)
 
+    @app.post("/jobs/{job_id}/quantity")
+    async def save_quantity(request: Request, job_id: int) -> JSONResponse:
+        """Persist a print quantity as soon as the operator changes it.
+
+        Called by the small autosave script in base.html on the input's
+        `input` event, instead of only saving quantity as a side effect of
+        clicking Print. Without this, an edited-but-not-yet-printed
+        quantity is invisible to /jobs/print-all (which only ever looks at
+        the persisted value) and is lost if the page is closed before
+        printing - the same "survive an accidental close" guarantee the
+        other session-stored fields already have.
+        """
+        session_id = _ensure_session_id(request)
+        job = job_store.get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        override = job_store.get_session_override(session_id, job_id)
+        data, selected_template, selected_printer, _ = _resolve_editor_state(
+            job, override
+        )
+        form = await request.form()
+        try:
+            quantity = _validate_quantity(form.get("quantity"))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=str(exc),
+            ) from exc
+        job_store.save_session_override(
+            session_id=session_id,
+            job_id=job_id,
+            data=data,
+            selected_template=selected_template,
+            selected_printer=selected_printer,
+            quantity=quantity,
+            preview_data_url=None if override is None else override["preview_data_url"],
+            render_error=None if override is None else override["render_error"],
+            print_error=None if override is None else override["print_error"],
+        )
+        return JSONResponse({"quantity": quantity})
+
     @app.post("/jobs/{job_id}/print-from-list")
     async def print_job_from_list(request: Request, job_id: int) -> RedirectResponse:
         session_id = _ensure_session_id(request)
@@ -600,22 +641,6 @@ def create_app(
         data, selected_template, selected_printer, quantity = _resolve_editor_state(
             job, override
         )
-        form = await request.form()
-        try:
-            quantity = _validate_quantity(form.get("quantity", quantity))
-        except ValueError as exc:
-            job_store.save_session_override(
-                session_id=session_id,
-                job_id=job_id,
-                data=data,
-                selected_template=selected_template,
-                selected_printer=selected_printer,
-                quantity=quantity,
-                preview_data_url=None if override is None else override["preview_data_url"],
-                render_error=None if override is None else override["render_error"],
-                print_error=str(exc),
-            )
-            return RedirectResponse("/jobs", status_code=status.HTTP_303_SEE_OTHER)
         _print_and_dequeue(
             config=config,
             store=job_store,
@@ -737,29 +762,6 @@ def create_app(
         data, selected_template, selected_printer, quantity = _resolve_editor_state(
             job, override
         )
-        form = await request.form()
-        try:
-            quantity = _validate_quantity(form.get("quantity", quantity))
-        except ValueError as exc:
-            job_store.save_session_override(
-                session_id=session_id,
-                job_id=job_id,
-                data=data,
-                selected_template=selected_template,
-                selected_printer=selected_printer,
-                quantity=quantity,
-                preview_data_url=None if override is None else override["preview_data_url"],
-                render_error=None if override is None else override["render_error"],
-                print_error=str(exc),
-            )
-            override = job_store.get_session_override(session_id, job_id)
-            return _render_job_page(
-                request,
-                config=config,
-                job=job,
-                override=override,
-                response_status=status.HTTP_502_BAD_GATEWAY,
-            )
         error = _print_and_dequeue(
             config=config,
             store=job_store,
