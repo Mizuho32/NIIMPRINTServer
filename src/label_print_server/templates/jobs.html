@@ -52,6 +52,7 @@
           <th>Text</th>
           <th>Template</th>
           <th>Printer</th>
+          <th>Qty</th>
           <th>Render / Print</th>
           <th>Thumb</th>
         </tr>
@@ -80,6 +81,17 @@
                   </option>
                 {% endfor %}
               </select>
+            </td>
+            <td>
+              <input
+                type="number"
+                name="quantity"
+                form="job-print-{{ job.id }}"
+                min="1"
+                max="100"
+                value="{{ job.quantity }}"
+                style="width: 4.5em;"
+              />
             </td>
             <td>
               <div class="actions">
@@ -123,7 +135,7 @@
           </tr>
         {% else %}
           <tr>
-            <td colspan="6">No queued jobs yet.</td>
+            <td colspan="7">No queued jobs yet.</td>
           </tr>
         {% endfor %}
       </tbody>

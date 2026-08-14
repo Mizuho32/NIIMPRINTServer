@@ -12,7 +12,9 @@ logger = logging.getLogger(__name__)
 
 
 class PrintClient(Protocol):
-    def print_label(self, printer: PrinterConfig, image_bytes: bytes) -> None: ...
+    def print_label(
+        self, printer: PrinterConfig, image_bytes: bytes, quantity: int = 1
+    ) -> None: ...
 
 
 class NiimprintPrintClient:
@@ -35,6 +37,13 @@ class NiimprintPrintClient:
     enforced before reconnecting, tracked per-printer from the moment the
     connection was dropped. Access per printer is serialized with a lock
     since FastAPI's sync route handlers can run on a thread pool.
+
+    `quantity` (multiple copies of the same label) is implemented as a loop
+    of independent `print_image()` calls rather than niimprint's native
+    copies-count field, so each copy gets its own retry budget. If a copy
+    fails after exhausting retries, the whole call raises and any remaining
+    copies are not attempted (the caller sees the job as failed and it stays
+    queued; printing again reprints from copy 1).
     """
 
     def __init__(self, retry: RetryConfig):
@@ -44,39 +53,53 @@ class NiimprintPrintClient:
         self._clients: dict[str, Any] = {}
         self._last_disconnect_at: dict[str, float] = {}
 
-    def print_label(self, printer: PrinterConfig, image_bytes: bytes) -> None:
+    def print_label(
+        self, printer: PrinterConfig, image_bytes: bytes, quantity: int = 1
+    ) -> None:
         from PIL import Image
 
         # Config problems (bad connection type, missing address) can't be
         # fixed by retrying, so fail fast instead of burning the retry budget.
         self._validate_printer(printer)
 
+        count = max(1, quantity)
         image = Image.open(BytesIO(image_bytes))
+
+        # One lock acquisition for the whole batch: copies of the same job
+        # print back-to-back on this printer without another job's print
+        # interleaving in between.
+        with self._lock_for(printer.name):
+            for copy_index in range(1, count + 1):
+                self._print_one(printer, image, copy_index, count)
+
+    def _print_one(self, printer: PrinterConfig, image: Any, copy_index: int, count: int) -> None:
         attempts = max(1, self.retry.max_attempts)
         last_error: Exception | None = None
 
-        with self._lock_for(printer.name):
-            for attempt in range(1, attempts + 1):
-                try:
-                    client = self._get_or_connect(printer)
-                    client.print_image(image, density=printer.density)
-                    return
-                except Exception as exc:  # noqa: BLE001 - niimprint raises loose/bare exceptions
-                    last_error = exc
-                    logger.warning(
-                        "print attempt %s/%s failed for printer '%s': %s",
-                        attempt,
-                        attempts,
-                        printer.name,
-                        exc,
-                    )
-                    # The connection may be wedged (or the printer/OS may
-                    # need to finish tearing it down); drop it so the next
-                    # attempt reconnects instead of reusing a bad socket.
-                    self._discard_connection(printer.name)
+        for attempt in range(1, attempts + 1):
+            try:
+                client = self._get_or_connect(printer)
+                client.print_image(image, density=printer.density)
+                return
+            except Exception as exc:  # noqa: BLE001 - niimprint raises loose/bare exceptions
+                last_error = exc
+                logger.warning(
+                    "print attempt %s/%s failed for printer '%s' (copy %s/%s): %s",
+                    attempt,
+                    attempts,
+                    printer.name,
+                    copy_index,
+                    count,
+                    exc,
+                )
+                # The connection may be wedged (or the printer/OS may need to
+                # finish tearing it down); drop it so the next attempt
+                # reconnects instead of reusing a bad socket.
+                self._discard_connection(printer.name)
 
         raise RuntimeError(
-            f"Failed to print on '{printer.name}' after {attempts} attempt(s): {last_error}"
+            f"Failed to print copy {copy_index}/{count} on '{printer.name}' "
+            f"after {attempts} attempt(s): {last_error}"
         ) from last_error
 
     def close(self) -> None:

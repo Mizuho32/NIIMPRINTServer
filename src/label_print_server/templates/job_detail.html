@@ -84,6 +84,18 @@
       成功すると job は Queue から削除されます。
     </p>
     <form method="post" action="/jobs/{{ job.id }}/print">
+      <div class="card">
+        <label for="quantity"><strong>Quantity</strong></label>
+        <input
+          type="number"
+          id="quantity"
+          name="quantity"
+          min="1"
+          max="100"
+          value="{{ quantity }}"
+          style="width: 6em;"
+        />
+      </div>
       <div class="actions">
         <button
           type="submit"

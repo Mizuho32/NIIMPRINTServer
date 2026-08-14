@@ -65,6 +65,11 @@ class JobStore:
                 connection.execute(
                     "ALTER TABLE session_overrides ADD COLUMN print_error TEXT"
                 )
+            if "quantity" not in existing_columns:
+                connection.execute(
+                    "ALTER TABLE session_overrides "
+                    "ADD COLUMN quantity INTEGER NOT NULL DEFAULT 1"
+                )
             connection.commit()
 
     def create_job(
@@ -152,6 +157,7 @@ class JobStore:
         data: dict[str, Any],
         selected_template: str,
         selected_printer: str,
+        quantity: int = 1,
         preview_data_url: str | None = None,
         render_error: str | None = None,
         print_error: str | None = None,
@@ -165,16 +171,18 @@ class JobStore:
                     data_json,
                     selected_template,
                     selected_printer,
+                    quantity,
                     preview_html,
                     render_error,
                     print_error,
                     updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_id, job_id) DO UPDATE SET
                     data_json = excluded.data_json,
                     selected_template = excluded.selected_template,
                     selected_printer = excluded.selected_printer,
+                    quantity = excluded.quantity,
                     preview_html = excluded.preview_html,
                     render_error = excluded.render_error,
                     print_error = excluded.print_error,
@@ -186,6 +194,7 @@ class JobStore:
                     json.dumps(data, ensure_ascii=False),
                     selected_template,
                     selected_printer,
+                    quantity,
                     preview_data_url,
                     render_error,
                     print_error,
@@ -256,6 +265,7 @@ class JobStore:
             "data": json.loads(row["data_json"]),
             "selected_template": row["selected_template"],
             "selected_printer": row["selected_printer"],
+            "quantity": row["quantity"],
             "preview_data_url": row["preview_html"],
             "render_error": row["render_error"],
             "print_error": row["print_error"],

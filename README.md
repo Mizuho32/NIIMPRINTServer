@@ -35,6 +35,7 @@ JSON object / array を受け取り、Queue に積み、Web UI で内容確認�
 9. 一覧画面・詳細画面から Print 実行。`niimprint` 経由で実機に送信し、成功時のみ Queue から dequeue（失敗時は Queue に残り、エラー内容を表示）
 10. 印刷失敗時は設定した回数・待機時間で再接続 + リトライしてから失敗扱いにする
 11. プリンタごとの接続を使い回す（連続印刷のたびに繋ぎ直さない）ので、複数枚の連続印刷が速い
+12. Print 実行時に印刷枚数（quantity）を指定可能。他のフィールドと同様ブラウザセッションに保存される。同じラベルを指定枚数分連続で印刷し、途中の1枚が失敗すると残り枚数は印刷せず job は Queue に残る
 
 ## まだやっていないこと
 
@@ -96,13 +97,13 @@ cd jsreport && npm install
 - `POST /jobs/dequeue-all` - 一覧上の全 job を dequeue
 - `POST /jobs/{job_id}/preview-from-list` - 一覧上の個別 job をレンダリング
 - `POST /jobs/{job_id}/dequeue` - 一覧上の個別 job を dequeue
-- `POST /jobs/{job_id}/print-from-list` - 一覧上の個別 job を印刷。成功時のみ dequeue、失敗時は一覧にエラー表示
+- `POST /jobs/{job_id}/print-from-list` - 一覧上の個別 job を印刷（フォームの `quantity` 枚数分）。成功時のみ dequeue、失敗時は一覧にエラー表示
 - `POST /api/jobs` - API から JSON object / array を投入
 - `GET /api/jobs` - Queue 一覧を JSON で取得
 - `GET /jobs/{job_id}` - 個別 job の編集 / preview 画面
 - `POST /jobs/{job_id}/draft` - セッション内 draft 保存
 - `POST /jobs/{job_id}/preview` - 詳細画面から PNG preview 生成
-- `POST /jobs/{job_id}/print` - 詳細画面から印刷。preview 済みの画像をそのまま送信し、成功時のみ dequeue
+- `POST /jobs/{job_id}/print` - 詳細画面から印刷（フォームの `quantity` 枚数分）。preview 済みの画像をそのまま送信し、成功時のみ dequeue
 
 ## テスト
 

@@ -128,6 +128,24 @@ class NiimprintPrintClientTestCase(unittest.TestCase):
         self.assertTrue(FakePrinterClientFixed.instances[0]._transport._sock.closed)
         self.assertFalse(FakePrinterClientFixed.instances[1]._transport._sock.closed)
 
+    def test_quantity_prints_multiple_copies_on_one_connection(self) -> None:
+        client = NiimprintPrintClient(RetryConfig(max_attempts=2, delay_seconds=0))
+        client.print_label(self.printer, _fake_png_bytes(), quantity=3)
+        self.assertEqual(len(FakePrinterClientFixed.densities), 3)
+        # All three copies reused the same connection - no reconnect needed
+        # since none of them failed.
+        self.assertEqual(len(FakePrinterClientFixed.instances), 1)
+
+    def test_quantity_stops_after_a_copy_exhausts_retries(self) -> None:
+        FakePrinterClientFixed.fail_times = 99  # every attempt fails
+        client = NiimprintPrintClient(RetryConfig(max_attempts=2, delay_seconds=0))
+        with self.assertRaises(RuntimeError) as ctx:
+            client.print_label(self.printer, _fake_png_bytes(), quantity=3)
+        self.assertIn("copy 1/3", str(ctx.exception))
+        # Only the first copy's 2 retry attempts happened; copies 2 and 3
+        # were never attempted.
+        self.assertEqual(len(FakePrinterClientFixed.densities), 2)
+
     def test_close_closes_all_held_connections(self) -> None:
         client = NiimprintPrintClient(RetryConfig(max_attempts=1, delay_seconds=0))
         client.print_label(self.printer, _fake_png_bytes())

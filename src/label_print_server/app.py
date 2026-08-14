@@ -79,18 +79,33 @@ def _fallback_job_summary(job: dict[str, Any]) -> str:
 def _resolve_editor_state(
     job: dict[str, Any],
     override: dict[str, Any] | None,
-) -> tuple[dict[str, Any], str, str]:
+) -> tuple[dict[str, Any], str, str, int]:
     if override is None:
         return (
             job["draft"],
             job["selected_template"],
             job["selected_printer"],
+            1,
         )
     return (
         override["data"],
         override["selected_template"],
         override["selected_printer"],
+        override["quantity"],
     )
+
+
+_MAX_PRINT_QUANTITY = 100
+
+
+def _validate_quantity(raw: Any) -> int:
+    try:
+        quantity = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid quantity: {raw!r}") from exc
+    if not (1 <= quantity <= _MAX_PRINT_QUANTITY):
+        raise ValueError(f"Quantity must be between 1 and {_MAX_PRINT_QUANTITY}")
+    return quantity
 
 
 def _preview_data_url(image_bytes: bytes) -> str:
@@ -123,7 +138,9 @@ def _render_jobs_page(
     job_cards = []
     for job in jobs:
         override = overrides.get(job["id"])
-        data, selected_template, selected_printer = _resolve_editor_state(job, override)
+        data, selected_template, selected_printer, quantity = _resolve_editor_state(
+            job, override
+        )
         try:
             summary_text = _job_summary(data, config.summary_key, summary_hook)
         except TypeError:
@@ -137,6 +154,7 @@ def _render_jobs_page(
                 "summary_text": summary_text,
                 "selected_template": selected_template,
                 "selected_printer": selected_printer,
+                "quantity": quantity,
                 "preview_data_url": (
                     None if override is None else override["preview_data_url"]
                 ),
@@ -170,7 +188,9 @@ def _render_job_page(
     error: str | None = None,
     response_status: int | None = None,
 ) -> HTMLResponse:
-    data, selected_template, selected_printer = _resolve_editor_state(job, override)
+    data, selected_template, selected_printer, quantity = _resolve_editor_state(
+        job, override
+    )
     status_code = response_status
     if status_code is None:
         status_code = status.HTTP_400_BAD_REQUEST if error else status.HTTP_200_OK
@@ -185,6 +205,7 @@ def _render_job_page(
             "data_json": dump_json(data),
             "selected_template": selected_template,
             "selected_printer": selected_printer,
+            "quantity": quantity,
             "templates": config.template_names(),
             "printers": config.printer_names(),
             "preview_data_url": (
@@ -265,6 +286,7 @@ def _render_and_store_preview(
     data: dict[str, Any],
     selected_template: str,
     selected_printer: str,
+    quantity: int,
 ) -> None:
     image_bytes = report_client.render_preview(
         config.template_by_name(selected_template),
@@ -276,6 +298,7 @@ def _render_and_store_preview(
         data=data,
         selected_template=selected_template,
         selected_printer=selected_printer,
+        quantity=quantity,
         preview_data_url=_preview_data_url(image_bytes),
         render_error=None,
         print_error=None,
@@ -292,6 +315,7 @@ def _print_and_dequeue(
     data: dict[str, Any],
     selected_template: str,
     selected_printer: str,
+    quantity: int,
     override: dict[str, Any] | None,
 ) -> str | None:
     """Print the currently-rendered preview and dequeue on success.
@@ -306,7 +330,7 @@ def _print_and_dequeue(
     else:
         try:
             printer_config = config.printer_by_name(selected_printer)
-            print_client.print_label(printer_config, image_bytes)
+            print_client.print_label(printer_config, image_bytes, quantity=quantity)
         except (KeyError, ValueError, RuntimeError) as exc:
             error = str(exc)
         else:
@@ -319,6 +343,7 @@ def _print_and_dequeue(
         data=data,
         selected_template=selected_template,
         selected_printer=selected_printer,
+        quantity=quantity,
         preview_data_url=None if override is None else override["preview_data_url"],
         render_error=None if override is None else override["render_error"],
         print_error=error,
@@ -449,7 +474,7 @@ def create_app(
         overrides = job_store.list_session_overrides(session_id)
         for job in jobs:
             override = overrides.get(job["id"])
-            data, selected_template, selected_printer = _resolve_editor_state(
+            data, selected_template, selected_printer, quantity = _resolve_editor_state(
                 job,
                 override,
             )
@@ -463,6 +488,7 @@ def create_app(
                     data=data,
                     selected_template=selected_template,
                     selected_printer=selected_printer,
+                    quantity=quantity,
                 )
             except RuntimeError as exc:
                 job_store.save_session_override(
@@ -471,6 +497,7 @@ def create_app(
                     data=data,
                     selected_template=selected_template,
                     selected_printer=selected_printer,
+                    quantity=quantity,
                     preview_data_url=None,
                     render_error=str(exc),
                 )
@@ -483,7 +510,7 @@ def create_app(
         overrides = job_store.list_session_overrides(session_id)
         for job in jobs:
             override = overrides.get(job["id"])
-            data, selected_template, selected_printer = _resolve_editor_state(
+            data, selected_template, selected_printer, quantity = _resolve_editor_state(
                 job,
                 override,
             )
@@ -496,6 +523,7 @@ def create_app(
                 data=data,
                 selected_template=selected_template,
                 selected_printer=selected_printer,
+                quantity=quantity,
                 override=override,
             )
         return RedirectResponse("/jobs", status_code=status.HTTP_303_SEE_OTHER)
@@ -510,7 +538,9 @@ def create_app(
         if job is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
         override = job_store.get_session_override(session_id, job_id)
-        data, selected_template, selected_printer = _resolve_editor_state(job, override)
+        data, selected_template, selected_printer, quantity = _resolve_editor_state(
+            job, override
+        )
         form = await request.form()
         try:
             selected_template = _validate_selection(
@@ -530,6 +560,7 @@ def create_app(
                 data=data,
                 selected_template=selected_template,
                 selected_printer=selected_printer,
+                quantity=quantity,
                 preview_data_url=None,
                 render_error=str(exc),
             )
@@ -544,6 +575,7 @@ def create_app(
                 data=data,
                 selected_template=selected_template,
                 selected_printer=selected_printer,
+                quantity=quantity,
             )
         except RuntimeError as exc:
             job_store.save_session_override(
@@ -552,6 +584,7 @@ def create_app(
                 data=data,
                 selected_template=selected_template,
                 selected_printer=selected_printer,
+                quantity=quantity,
                 preview_data_url=None,
                 render_error=str(exc),
             )
@@ -564,7 +597,25 @@ def create_app(
         if job is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
         override = job_store.get_session_override(session_id, job_id)
-        data, selected_template, selected_printer = _resolve_editor_state(job, override)
+        data, selected_template, selected_printer, quantity = _resolve_editor_state(
+            job, override
+        )
+        form = await request.form()
+        try:
+            quantity = _validate_quantity(form.get("quantity", quantity))
+        except ValueError as exc:
+            job_store.save_session_override(
+                session_id=session_id,
+                job_id=job_id,
+                data=data,
+                selected_template=selected_template,
+                selected_printer=selected_printer,
+                quantity=quantity,
+                preview_data_url=None if override is None else override["preview_data_url"],
+                render_error=None if override is None else override["render_error"],
+                print_error=str(exc),
+            )
+            return RedirectResponse("/jobs", status_code=status.HTTP_303_SEE_OTHER)
         _print_and_dequeue(
             config=config,
             store=job_store,
@@ -574,6 +625,7 @@ def create_app(
             data=data,
             selected_template=selected_template,
             selected_printer=selected_printer,
+            quantity=quantity,
             override=override,
         )
         return RedirectResponse("/jobs", status_code=status.HTTP_303_SEE_OTHER)
@@ -584,6 +636,7 @@ def create_app(
         job = job_store.get_job(job_id)
         if job is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        override = job_store.get_session_override(session_id, job_id)
         try:
             data, selected_template, selected_printer = await _read_editor_submission(
                 request,
@@ -591,7 +644,6 @@ def create_app(
                 job=job,
             )
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            override = job_store.get_session_override(session_id, job_id)
             return _render_job_page(
                 request,
                 config=config,
@@ -600,12 +652,16 @@ def create_app(
                 error=str(exc),
             )
 
+        # This form doesn't carry quantity (that's only on the Print form),
+        # so keep whatever was already set instead of resetting it to 1.
+        quantity = 1 if override is None else override["quantity"]
         job_store.save_session_override(
             session_id=session_id,
             job_id=job_id,
             data=data,
             selected_template=selected_template,
             selected_printer=selected_printer,
+            quantity=quantity,
         )
         return RedirectResponse(
             f"/jobs/{job_id}",
@@ -618,6 +674,7 @@ def create_app(
         job = job_store.get_job(job_id)
         if job is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+        override = job_store.get_session_override(session_id, job_id)
         try:
             data, selected_template, selected_printer = await _read_editor_submission(
                 request,
@@ -625,7 +682,6 @@ def create_app(
                 job=job,
             )
         except (TypeError, ValueError, json.JSONDecodeError) as exc:
-            override = job_store.get_session_override(session_id, job_id)
             return _render_job_page(
                 request,
                 config=config,
@@ -634,6 +690,8 @@ def create_app(
                 error=str(exc),
             )
 
+        # Preserve quantity across a render; it's only set from the Print form.
+        quantity = 1 if override is None else override["quantity"]
         try:
             _render_and_store_preview(
                 config=config,
@@ -644,6 +702,7 @@ def create_app(
                 data=data,
                 selected_template=selected_template,
                 selected_printer=selected_printer,
+                quantity=quantity,
             )
         except RuntimeError as exc:
             job_store.save_session_override(
@@ -652,6 +711,7 @@ def create_app(
                 data=data,
                 selected_template=selected_template,
                 selected_printer=selected_printer,
+                quantity=quantity,
                 preview_data_url=None,
                 render_error=str(exc),
             )
@@ -674,7 +734,32 @@ def create_app(
         if job is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
         override = job_store.get_session_override(session_id, job_id)
-        data, selected_template, selected_printer = _resolve_editor_state(job, override)
+        data, selected_template, selected_printer, quantity = _resolve_editor_state(
+            job, override
+        )
+        form = await request.form()
+        try:
+            quantity = _validate_quantity(form.get("quantity", quantity))
+        except ValueError as exc:
+            job_store.save_session_override(
+                session_id=session_id,
+                job_id=job_id,
+                data=data,
+                selected_template=selected_template,
+                selected_printer=selected_printer,
+                quantity=quantity,
+                preview_data_url=None if override is None else override["preview_data_url"],
+                render_error=None if override is None else override["render_error"],
+                print_error=str(exc),
+            )
+            override = job_store.get_session_override(session_id, job_id)
+            return _render_job_page(
+                request,
+                config=config,
+                job=job,
+                override=override,
+                response_status=status.HTTP_502_BAD_GATEWAY,
+            )
         error = _print_and_dequeue(
             config=config,
             store=job_store,
@@ -684,6 +769,7 @@ def create_app(
             data=data,
             selected_template=selected_template,
             selected_printer=selected_printer,
+            quantity=quantity,
             override=override,
         )
         if error is None:

@@ -18,12 +18,12 @@ class FakeRenderer:
 
 class FakePrintClient:
     def __init__(self, fail_times: int = 0, error_message: str = "printer offline"):
-        self.calls: list[tuple[str, bytes]] = []
+        self.calls: list[tuple[str, bytes, int]] = []
         self.fail_times = fail_times
         self.error_message = error_message
 
-    def print_label(self, printer, image_bytes):
-        self.calls.append((printer.name, image_bytes))
+    def print_label(self, printer, image_bytes, quantity=1):
+        self.calls.append((printer.name, image_bytes, quantity))
         if self.fail_times > 0:
             self.fail_times -= 1
             raise RuntimeError(self.error_message)
@@ -265,6 +265,89 @@ def summary_text(data):
         response = self.client.post("/jobs/1/print-from-list", follow_redirects=True)
         self.assertEqual(response.status_code, 200)
         self.assertIn("No queued jobs yet.", response.text)
+
+    def test_print_from_list_uses_submitted_quantity(self) -> None:
+        self.client.post(
+            "/api/jobs",
+            json={"id": "000-023", "name": "Multi"},
+        )
+        self.client.post(
+            "/jobs/1/preview-from-list",
+            data={"selected_template": "Label", "selected_printer": "printer-a"},
+            follow_redirects=True,
+        )
+
+        response = self.client.post(
+            "/jobs/1/print-from-list",
+            data={"quantity": "3"},
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(self.print_client.calls), 1)
+        self.assertEqual(self.print_client.calls[0][2], 3)
+
+    def test_print_from_list_rejects_invalid_quantity(self) -> None:
+        self.client.post(
+            "/api/jobs",
+            json={"id": "000-024", "name": "BadQty"},
+        )
+        self.client.post(
+            "/jobs/1/preview-from-list",
+            data={"selected_template": "Label", "selected_printer": "printer-a"},
+            follow_redirects=True,
+        )
+
+        response = self.client.post(
+            "/jobs/1/print-from-list",
+            data={"quantity": "0"},
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Quantity must be between 1 and 100", response.text)
+        self.assertEqual(self.print_client.calls, [])
+
+        jobs_response = self.client.get("/api/jobs")
+        self.assertEqual(len(jobs_response.json()["jobs"]), 1)
+
+    def test_detail_print_uses_submitted_quantity(self) -> None:
+        self.client.post(
+            "/api/jobs",
+            json={"id": "000-025", "name": "DetailQty"},
+        )
+        self.client.post(
+            "/jobs/1/preview",
+            data={
+                "data_json": json.dumps(
+                    {"id": "000-025", "name": "DetailQty", "name_line": "x"}
+                ),
+                "selected_template": "Label",
+                "selected_printer": "printer-a",
+            },
+        )
+
+        response = self.client.post(
+            "/jobs/1/print",
+            data={"quantity": "5"},
+            follow_redirects=True,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(self.print_client.calls), 1)
+        self.assertEqual(self.print_client.calls[0][2], 5)
+
+    def test_print_defaults_to_quantity_one_when_omitted(self) -> None:
+        self.client.post(
+            "/api/jobs",
+            json={"id": "000-026", "name": "DefaultQty"},
+        )
+        self.client.post(
+            "/jobs/1/preview-from-list",
+            data={"selected_template": "Label", "selected_printer": "printer-a"},
+            follow_redirects=True,
+        )
+
+        response = self.client.post("/jobs/1/print", follow_redirects=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.print_client.calls[0][2], 1)
 
     def test_intake_form_hidden_when_debug_disabled(self) -> None:
         root = Path(self.temp_dir.name)
